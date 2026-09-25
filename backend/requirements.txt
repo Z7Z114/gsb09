@@ -1,0 +1,3 @@
+# 轻量依赖在仓库根目录的 requirements.txt；
+# 重型可选依赖（Whisper / pyannote / librosa / OpenAI / SMTP）见根目录 requirements-ml.txt。
+-r ../requirements.txt
