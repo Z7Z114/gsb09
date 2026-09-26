@@ -57,23 +57,23 @@ class ArchiveService:
 """
 
         if self.client:
-            try:
-                response = self.client.chat.completions.create(
-                    model="gpt-4",
-                    messages=[
-                        {"role": "system", "content": "你是一位专业的非物质文化遗产档案管理员，擅长整理传统工艺口传知识。"},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.3,
-                    response_format={"type": "json_object"}
-                )
+            # 一旦真实发起外部调用，失败必须向上抛出，
+            # 不得用离线摘要冒充成功结果落库
+            response = self.client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "你是一位专业的非物质文化遗产档案管理员，擅长整理传统工艺口传知识。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
 
-                result = json.loads(response.choices[0].message.content)
-                return result
-            except Exception as e:
-                print(f"OpenAI API error: {e}")
-                return self._generate_summary_fallback(transcripts, craftsmen, audio_metadata)
+            result = json.loads(response.choices[0].message.content)
+            result["is_fallback"] = False
+            return result
         else:
+            # 未配置 OPENAI_API_KEY（服务不可用）：走确定性离线摘要，带可识别标记
             return self._generate_summary_fallback(transcripts, craftsmen, audio_metadata)
 
     def _generate_summary_fallback(self, transcripts: List[Dict[str, Any]],
@@ -107,6 +107,7 @@ class ArchiveService:
                 schools.add(school)
 
         return {
+            "is_fallback": True,
             "title": "传统弓箭制作工艺传承交流会议",
             "summary": f"本次会议共{len(craftsmen)}位匠人参与，来自{len(schools)}个不同流派。"
                       f"会议围绕传统弓箭制作工艺展开交流，涵盖了{len(key_points)}个核心工艺要点。"

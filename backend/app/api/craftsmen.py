@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List
 from .. import models, schemas
@@ -8,7 +8,8 @@ router = APIRouter(prefix="/craftsmen", tags=["craftsmen"])
 
 
 @router.get("/", response_model=List[schemas.Craftsman])
-def list_craftsmen(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def list_craftsmen(skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+                   db: Session = Depends(get_db)):
     craftsmen = db.query(models.Craftsman).offset(skip).limit(limit).all()
     return craftsmen
 
@@ -49,7 +50,15 @@ def delete_craftsman(craftsman_id: int, db: Session = Depends(get_db)):
     db_craftsman = db.query(models.Craftsman).filter(models.Craftsman.id == craftsman_id).first()
     if not db_craftsman:
         raise HTTPException(status_code=404, detail="Craftsman not found")
-    
+
+    # 删除匠人时将其名下消息与转写匿名化，避免留下指向已删除记录的悬空引用
+    db.query(models.Message).filter(models.Message.craftsman_id == craftsman_id).update(
+        {"craftsman_id": None}, synchronize_session="auto"
+    )
+    db.query(models.Transcript).filter(models.Transcript.craftsman_id == craftsman_id).update(
+        {"craftsman_id": None}, synchronize_session="auto"
+    )
+
     db.delete(db_craftsman)
     db.commit()
     return {"message": "Craftsman deleted successfully"}

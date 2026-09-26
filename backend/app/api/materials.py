@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List
 from .. import models, schemas
@@ -9,7 +9,8 @@ router = APIRouter(prefix="/materials", tags=["materials"])
 
 
 @router.get("/woods", response_model=List[schemas.WoodMaterial])
-def list_woods(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def list_woods(skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+               db: Session = Depends(get_db)):
     woods = db.query(models.WoodMaterial).offset(skip).limit(limit).all()
     return woods
 
@@ -32,7 +33,8 @@ def create_wood(wood: schemas.WoodMaterialCreate, db: Session = Depends(get_db))
 
 
 @router.get("/bow-parts", response_model=List[schemas.BowPart])
-def list_bow_parts(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def list_bow_parts(skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+                   db: Session = Depends(get_db)):
     parts = db.query(models.BowPart).offset(skip).limit(limit).all()
     return parts
 
@@ -56,9 +58,8 @@ def create_bow_part(part: schemas.BowPartCreate, db: Session = Depends(get_db)):
 
 @router.post("/seed-data")
 def seed_initial_data(db: Session = Depends(get_db)):
-    existing_woods = db.query(models.WoodMaterial).count()
-    if existing_woods == 0:
-        woods_data = [
+    # 逐条按名称幂等写入：已存在的跳过，只补缺失的，重复调用不产生重复记录
+    woods_data = [
             {
                 "name": "桦木",
                 "scientific_name": "Betula platyphylla",
@@ -135,14 +136,17 @@ def seed_initial_data(db: Session = Depends(get_db)):
                 "traditional_usage": "柘木为制弓之上品，古代帝王专用的'天子之弓'多以柘木为胎，配合牛角、牛筋，价值连城。"
             }
         ]
-        
-        for wood in woods_data:
-            db_wood = models.WoodMaterial(**wood)
-            db.add(db_wood)
-    
-    existing_parts = db.query(models.BowPart).count()
-    if existing_parts == 0:
-        bow_parts_data = [
+
+    woods_added = 0
+    for wood in woods_data:
+        exists = db.query(models.WoodMaterial).filter(
+            models.WoodMaterial.name == wood["name"]
+        ).first()
+        if not exists:
+            db.add(models.WoodMaterial(**wood))
+            woods_added += 1
+
+    bow_parts_data = [
             {
                 "name": "弓胎",
                 "traditional_name": "胎",
@@ -214,14 +218,17 @@ def seed_initial_data(db: Session = Depends(get_db)):
                 ]
             }
         ]
-        
-        for part in bow_parts_data:
-            db_part = models.BowPart(**part)
-            db.add(db_part)
-    
-    existing_craftsmen = db.query(models.Craftsman).count()
-    if existing_craftsmen == 0:
-        craftsmen_data = [
+
+    bow_parts_added = 0
+    for part in bow_parts_data:
+        exists = db.query(models.BowPart).filter(
+            models.BowPart.name == part["name"]
+        ).first()
+        if not exists:
+            db.add(models.BowPart(**part))
+            bow_parts_added += 1
+
+    craftsmen_data = [
             {
                 "name": "杨福喜",
                 "school": "汉族传统弓",
@@ -247,16 +254,21 @@ def seed_initial_data(db: Session = Depends(get_db)):
                 "contact": "满族弓箭作坊"
             }
         ]
-        
-        for craftsman in craftsmen_data:
-            db_craftsman = models.Craftsman(**craftsman)
-            db.add(db_craftsman)
+
+    craftsmen_added = 0
+    for craftsman in craftsmen_data:
+        exists = db.query(models.Craftsman).filter(
+            models.Craftsman.name == craftsman["name"]
+        ).first()
+        if not exists:
+            db.add(models.Craftsman(**craftsman))
+            craftsmen_added += 1
     
     db.commit()
     
     return {
         "message": "Initial data seeded successfully",
-        "woods_added": existing_woods == 0,
-        "bow_parts_added": existing_parts == 0,
-        "craftsmen_added": existing_craftsmen == 0
+        "woods_added": woods_added > 0,
+        "bow_parts_added": bow_parts_added > 0,
+        "craftsmen_added": craftsmen_added > 0
     }

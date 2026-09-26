@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 from .. import models, schemas
@@ -17,9 +17,12 @@ PROCESSED_DIR = "processed"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PROCESSED_DIR, exist_ok=True)
 
+ALLOWED_AUDIO_EXTENSIONS = {"wav", "mp3", "m4a", "flac", "aac", "ogg"}
+
 
 @router.get("/recordings", response_model=List[schemas.AudioRecording])
-def list_recordings(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def list_recordings(skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+                    db: Session = Depends(get_db)):
     recordings = db.query(models.AudioRecording).order_by(models.AudioRecording.recorded_at.desc()).offset(skip).limit(limit).all()
     return recordings
 
@@ -34,8 +37,20 @@ def get_recording(recording_id: int, db: Session = Depends(get_db)):
 
 @router.post("/upload")
 async def upload_audio(file: UploadFile = File(...), workshop: str = "default", db: Session = Depends(get_db)):
-    file_extension = os.path.splitext(file.filename)[1]
-    unique_filename = f"{uuid.uuid4()}{file_extension}"
+    # 规整原始文件名：去掉任何路径成分（含 Windows 反斜杠），保留中文名
+    raw_filename = file.filename or ""
+    safe_filename = os.path.basename(raw_filename.replace("\\", "/")).strip()
+    if not safe_filename:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
+
+    file_extension = os.path.splitext(safe_filename)[1].lower().lstrip(".")
+    if file_extension not in ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型：仅允许 {', '.join(sorted(ALLOWED_AUDIO_EXTENSIONS))}"
+        )
+
+    unique_filename = f"{uuid.uuid4()}.{file_extension}"
     file_path = os.path.join(UPLOAD_DIR, unique_filename)
     
     with open(file_path, "wb") as buffer:
@@ -43,7 +58,7 @@ async def upload_audio(file: UploadFile = File(...), workshop: str = "default", 
         buffer.write(content)
     
     db_recording = models.AudioRecording(
-        filename=file.filename,
+        filename=safe_filename,
         original_path=file_path,
         workshop=workshop,
         status="uploaded"
@@ -54,7 +69,7 @@ async def upload_audio(file: UploadFile = File(...), workshop: str = "default", 
     
     return {
         "recording_id": db_recording.id,
-        "filename": file.filename,
+        "filename": safe_filename,
         "path": file_path,
         "status": "uploaded"
     }

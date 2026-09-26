@@ -1,7 +1,14 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+
+
+def _require_non_blank(value: str) -> str:
+    """必填字符串：去除首尾空白后必须非空，仅含空白视为非法。"""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("必填字段不能为空或仅包含空白字符")
+    return value.strip()
 
 
 class CraftsmanBase(BaseModel):
@@ -11,6 +18,8 @@ class CraftsmanBase(BaseModel):
     bio: Optional[str] = None
     avatar: Optional[str] = None
     contact: Optional[str] = None
+
+    _check_name = field_validator("name", "school")(_require_non_blank)
 
 
 class CraftsmanCreate(CraftsmanBase):
@@ -29,6 +38,8 @@ class MessageBase(BaseModel):
     content: str
     craftsman_id: Optional[int] = None
     message_type: str = "chat"
+
+    _check_content = field_validator("content")(_require_non_blank)
 
 
 class MessageCreate(MessageBase):
@@ -138,6 +149,8 @@ class WoodMaterialBase(BaseModel):
     properties: Optional[Dict[str, Any]] = None
     traditional_usage: Optional[str] = None
 
+    _check_name = field_validator("name")(_require_non_blank)
+
 
 class WoodMaterialCreate(WoodMaterialBase):
     pass
@@ -157,6 +170,8 @@ class BowPartBase(BaseModel):
     diagram_coords: Optional[Dict[str, Any]] = None
     materials: Optional[List[str]] = None
     crafting_steps: Optional[List[Dict[str, Any]]] = None
+
+    _check_name = field_validator("name")(_require_non_blank)
 
 
 class BowPartCreate(BowPartBase):

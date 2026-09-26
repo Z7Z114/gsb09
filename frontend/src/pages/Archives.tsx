@@ -56,7 +56,7 @@ export default function Archives() {
     try {
       const result = await api.archives.sendEmail({ archive_id: archiveId });
       await loadData();
-      alert(result.success || result.mock_mode ? '邮件发送成功！' : `邮件发送失败: ${result.message}`);
+      alert(result.success ? '邮件发送成功！' : `邮件发送失败: ${result.message}`);
     } catch (error) {
       console.error('Failed to send email:', error);
       alert('邮件发送失败');
