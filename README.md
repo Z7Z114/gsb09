@@ -149,14 +149,40 @@ cd backend && python -m pytest -q
     （置信度反映命中数占比）；无任何命中时返回「未知流派」且置信度为 `0`。
 20. `transcription_service.extract_keywords` 的分类口径保持不变（材料 / 工艺 / 结构 / 技术 / 其他）。
 
-## 已知问题（现象举例，不完整）
+## 变更说明
 
-- 新建匠人时名字只填空格也能创建成功。
-- 消息可以指向一个根本不存在的匠人，列表里就会显示成悬空记录。
-- 上传接口对文件类型来者不拒，`.sh`、无名文件也能传成"录音"。
-- 手艺人交流页面偶尔卡死收不到新消息，刷新才恢复。
-- 邮件其实没发出去，档案列表却显示"已发送非遗中心"。
-- 档案生成时 OpenAI 报错，接口仍然返回成功，生成的是模板内容。
+本次修复以「行为规格」为验收标准，逐条修正了以下缺陷（根因 → 修法）：
+
+- **必填字符串接受空白值**：`schemas.py` 的 `name` / `school` / `content` 等字段只声明了
+  `str` 类型，空字符串与纯空白都能通过校验。→ 新增统一的 `field_validator`，
+  去除首尾空白后为空即返回 422，入库值同时被规整（去首尾空白）。
+- **分页参数无边界**：`skip` / `limit` 是普通 `int` 参数，负数与 `limit=0` 被静默接受。
+  → 全部列表接口改用 `Query(0, ge=0)` 与 `Query(100, ge=1, le=200)`，越界返回 422。
+- **消息外键悬空**：`POST /api/messages/` 不校验 `craftsman_id` 是否存在；删除匠人后其名下
+  消息仍指向已删除记录。→ 创建消息时匠人不存在返回 404（`craftsman_id=null` 的匿名发言
+  仍允许）；删除匠人时将其消息与转写的 `craftsman_id` 置空（转为匿名），不留悬空引用。
+- **种子数据返回体不诚实**：重复调用虽然不会重复写入，但返回的 `message` 永远是
+  "seeded successfully"。→ 返回体按本次实际写入情况给出 `message`，
+  `woods_added` / `bow_parts_added` / `craftsmen_added` 如实反映是否写入。
+- **上传不做类型校验、文件名未规整**：任何扩展名（含无扩展名）都被当作录音接收，
+  且 `filename` 原样回显可能携带 `../../` 路径成分。→ 按扩展名白名单
+  （wav/mp3/m4a/flac/aac/ogg）校验，非白名单或无扩展名返回 400；文件名先做
+  `basename` 规整（兼容 Windows 反斜杠路径），落盘文件使用 UUID 名，不会逃逸出上传目录；
+  未提供文件时由 `File(...)` 返回 422。
+- **WebSocket 连接泄漏与广播中断**：收到非法 JSON 时异常逃逸出循环，连接永久残留在
+  `active_connections`；广播时一个坏连接抛异常会中断后续所有连接；`disconnect` 用
+  `list.remove`，重复摘除会抛 `ValueError`。→ 非法 JSON 回错误提示后连接继续存活；
+  `finally` 保证断开（含异常断开）一定摘除；广播逐个 `try`，坏连接摘除后继续发给其余
+  连接；`disconnect` 改为幂等。WebSocket 写入消息同样走 `MessageCreate` 校验与匠人存在性
+  检查。前端"偶尔卡死收不到新消息"即广播中断所致，已随后端修复。
+- **档案摘要失败伪装成功**：`archive_service` 把真实 OpenAI 调用的异常吞掉并改用离线
+  模板返回。→ 未配置 `OPENAI_API_KEY` 时走离线摘要且结果带 `is_fallback: true` 标记
+  （落库档案的 `content.is_fallback` 同样置真）；一旦真实发起调用且失败，异常直接向上
+  抛出，不再落库伪装成功。
+- **邮件假装发送**：`send-email` 只要响应带 `mock_mode` 就标记 `sent_to_feiyi=1`。
+  → 只有 `success=true`（确实投递成功）才标记已发送并写入 `sent_at`；未配置 SMTP 或
+  投递失败时响应为 `success=false` 且档案保持未发送状态。前端 `Archives.tsx` 同步修正，
+  不再把 `mock_mode` 当作发送成功提示。
 
 ## 技术栈
 

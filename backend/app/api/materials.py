@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List
 from .. import models, schemas
@@ -9,7 +9,8 @@ router = APIRouter(prefix="/materials", tags=["materials"])
 
 
 @router.get("/woods", response_model=List[schemas.WoodMaterial])
-def list_woods(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def list_woods(skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+               db: Session = Depends(get_db)):
     woods = db.query(models.WoodMaterial).offset(skip).limit(limit).all()
     return woods
 
@@ -32,7 +33,8 @@ def create_wood(wood: schemas.WoodMaterialCreate, db: Session = Depends(get_db))
 
 
 @router.get("/bow-parts", response_model=List[schemas.BowPart])
-def list_bow_parts(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def list_bow_parts(skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+                   db: Session = Depends(get_db)):
     parts = db.query(models.BowPart).offset(skip).limit(limit).all()
     return parts
 
@@ -253,10 +255,16 @@ def seed_initial_data(db: Session = Depends(get_db)):
             db.add(db_craftsman)
     
     db.commit()
-    
+
+    woods_added = existing_woods == 0
+    bow_parts_added = existing_parts == 0
+    craftsmen_added = existing_craftsmen == 0
+    any_added = woods_added or bow_parts_added or craftsmen_added
+
     return {
-        "message": "Initial data seeded successfully",
-        "woods_added": existing_woods == 0,
-        "bow_parts_added": existing_parts == 0,
-        "craftsmen_added": existing_craftsmen == 0
+        "message": "Initial data seeded successfully" if any_added
+                   else "Seed data already exists, nothing added",
+        "woods_added": woods_added,
+        "bow_parts_added": bow_parts_added,
+        "craftsmen_added": craftsmen_added
     }

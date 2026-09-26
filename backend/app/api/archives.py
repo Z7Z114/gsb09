@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 from .. import models, schemas
@@ -13,7 +13,8 @@ router = APIRouter(prefix="/archives", tags=["archives"])
 
 
 @router.get("/", response_model=List[schemas.CraftArchive])
-def list_archives(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def list_archives(skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+                  db: Session = Depends(get_db)):
     archives = db.query(models.CraftArchive).order_by(models.CraftArchive.generated_at.desc()).offset(skip).limit(limit).all()
     return archives
 
@@ -73,16 +74,21 @@ def generate_archive_task(recording_id: int, transcripts: List[Dict[str, Any]],
                            craftsmen: List[Dict[str, Any]], audio_metadata: Dict[str, Any], db: Session):
     try:
         archive_data = archive_service.generate_archive_summary(transcripts, craftsmen, audio_metadata)
-        
+
         transcript_ids = db.query(models.Transcript.id).filter(
             models.Transcript.recording_id == recording_id
         ).all()
         transcript_id_list = [t[0] for t in transcript_ids]
-        
+
+        # 离线摘要的可识别标记随档案一起落库，不得伪装成真实摘要
+        content = archive_data.get("content", {}) or {}
+        if archive_data.get("is_fallback"):
+            content = {**content, "is_fallback": True}
+
         db_archive = models.CraftArchive(
             title=archive_data.get("title", "传统弓箭制作工艺档案"),
             summary=archive_data.get("summary", ""),
-            content=archive_data.get("content", {}),
+            content=content,
             keywords=archive_data.get("keywords", []),
             related_transcript_ids=transcript_id_list
         )
@@ -141,9 +147,10 @@ async def send_archive_email(request: schemas.ArchiveEmailRequest, db: Session =
         request.custom_message
     )
     
-    if result.get("success") or result.get("mock_mode"):
+    # 只有确实投递成功才标记已发送；未配置或投递失败时保持原状
+    if result.get("success"):
         archive.sent_to_feiyi = 1
         archive.sent_at = datetime.utcnow()
         db.commit()
-    
+
     return result

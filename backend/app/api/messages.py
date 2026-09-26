@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, Query
 from sqlalchemy.orm import Session
 from typing import List
 from .. import models, schemas
-from ..database import get_db
+from ..database import get_db, SessionLocal
 import json
 
 router = APIRouter(prefix="/messages", tags=["messages"])
@@ -17,18 +17,28 @@ class ConnectionManager:
         self.active_connections.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        # 重复摘除不应抛异常
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
 
     async def broadcast(self, message: dict):
-        for connection in self.active_connections:
-            await connection.send_json(message)
+        # 单个坏连接不得中断广播：摘除它并继续发给其余连接
+        stale = []
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_json(message)
+            except Exception:
+                stale.append(connection)
+        for connection in stale:
+            self.disconnect(connection)
 
 
 manager = ConnectionManager()
 
 
 @router.get("/", response_model=List[schemas.Message])
-def list_messages(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def list_messages(skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+                  db: Session = Depends(get_db)):
     messages = db.query(models.Message).order_by(models.Message.timestamp.desc()).offset(skip).limit(limit).all()
     return messages
 
@@ -43,7 +53,14 @@ def get_message(message_id: int, db: Session = Depends(get_db)):
 
 @router.post("/", response_model=schemas.Message)
 async def create_message(message: schemas.MessageCreate, db: Session = Depends(get_db)):
-    db_message = models.Message(**message.dict())
+    if message.craftsman_id is not None:
+        craftsman = db.query(models.Craftsman).filter(
+            models.Craftsman.id == message.craftsman_id
+        ).first()
+        if not craftsman:
+            raise HTTPException(status_code=404, detail="Craftsman not found")
+
+    db_message = models.Message(**message.model_dump())
     db.add(db_message)
     db.commit()
     db.refresh(db_message)
@@ -74,17 +91,27 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            message_data = json.loads(data)
-            
-            from fastapi import Depends
-            from ..database import SessionLocal
+            try:
+                message_data = json.loads(data)
+                if not isinstance(message_data, dict):
+                    raise ValueError("消息必须是 JSON 对象")
+                message = schemas.MessageCreate(**message_data)
+            except (json.JSONDecodeError, ValueError) as exc:
+                # 非法输入：回错误提示并保持连接存活，不得让连接变僵尸
+                await websocket.send_json({"type": "error", "detail": f"非法消息：{exc}"})
+                continue
+
             db = SessionLocal()
             try:
-                db_message = models.Message(
-                    content=message_data.get("content", ""),
-                    craftsman_id=message_data.get("craftsman_id"),
-                    message_type=message_data.get("message_type", "chat")
-                )
+                if message.craftsman_id is not None:
+                    craftsman = db.query(models.Craftsman).filter(
+                        models.Craftsman.id == message.craftsman_id
+                    ).first()
+                    if not craftsman:
+                        await websocket.send_json({"type": "error", "detail": "匠人不存在"})
+                        continue
+
+                db_message = models.Message(**message.model_dump())
                 db.add(db_message)
                 db.commit()
                 db.refresh(db_message)
@@ -107,5 +134,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 await manager.broadcast(response)
             finally:
                 db.close()
-    except WebSocketDisconnect:
+    finally:
+        # 正常断开或异常退出都必须安全摘除，避免连接泄漏
         manager.disconnect(websocket)
